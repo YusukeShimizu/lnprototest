@@ -27,6 +27,7 @@ from lnprototest import (
     SpecFileError,
     KeySet,
     Conn,
+    RunnerConn,
     namespace,
     MustNotMsg,
 )
@@ -37,12 +38,12 @@ TIMEOUT = int(os.getenv("TIMEOUT", "60"))
 LIGHTNING_SRC = os.path.join(os.getcwd(), os.getenv("LIGHTNING_SRC", "../lightning/"))
 
 
-class CLightningConn(lnprototest.Conn):
+class CLightningConn(RunnerConn):
     def __init__(self, connprivkey: str, port: int):
-        super().__init__(connprivkey)
+        privkey = lnprototest.privkey_expand(connprivkey)
         # FIXME: pyln.proto.wire should just use coincurve PrivateKey!
-        self.connection = pyln.proto.wire.connect(
-            pyln.proto.wire.PrivateKey(bytes.fromhex(self.connprivkey.to_hex())),
+        connection = pyln.proto.wire.connect(
+            pyln.proto.wire.PrivateKey(bytes.fromhex(privkey.to_hex())),
             # FIXME: Ask node for pubkey
             pyln.proto.wire.PublicKey(
                 bytes.fromhex(
@@ -52,6 +53,7 @@ class CLightningConn(lnprototest.Conn):
             "127.0.0.1",
             port,
         )
+        super().__init__(connprivkey, connection)
 
 
 class Runner(lnprototest.Runner):
@@ -228,8 +230,10 @@ class Runner(lnprototest.Runner):
         self.bitcoind.restart()
         self.start(also_bitcoind=False)
 
-    def connect(self, _: Event, connprivkey: str) -> None:
-        self.add_conn(CLightningConn(connprivkey, self.lightning_port))
+    def connect(self, _: Event, connprivkey: str) -> RunnerConn:
+        conn = CLightningConn(connprivkey, self.lightning_port)
+        self.add_conn(conn)
+        return conn
 
     def getblockheight(self) -> int:
         return self.bitcoind.rpc.getblockcount()

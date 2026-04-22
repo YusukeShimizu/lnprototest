@@ -58,10 +58,12 @@ class DummyRunner(Runner):
             print("[RESTART]")
         self.blockheight = 102
 
-    def connect(self, event: Event, connprivkey: str) -> None:
+    def connect(self, event: Event, connprivkey: str) -> Conn:
         if self.config.getoption("verbose"):
             print("[CONNECT {} {}]".format(event, connprivkey))
-        self.add_conn(Conn(connprivkey))
+        conn = Conn(connprivkey)
+        self.add_conn(conn)
+        return conn
 
     def getblockheight(self) -> int:
         return self.blockheight

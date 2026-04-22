@@ -46,6 +46,7 @@ from .structure import Sequence, OneOf, AnyOrder, TryAll
 from .runner import (
     Runner,
     Conn,
+    RunnerConn,
     remote_revocation_basepoint,
     remote_payment_basepoint,
     remote_delayed_payment_basepoint,
@@ -123,6 +124,7 @@ __all__ = [
     "DummyRunner",
     "Runner",
     "Conn",
+    "RunnerConn",
     "KeySet",
     "peer_message_namespace",
     "namespace",

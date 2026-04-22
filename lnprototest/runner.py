@@ -1,15 +1,18 @@
 #! /usr/bin/python3
+import io
 import logging
 import shutil
 import tempfile
 
 import coincurve
 import functools
+from pyln.proto.message import Message
 
 from .bitfield import bitfield
 from .errors import SpecFileError
 from .structure import Sequence
 from .event import Event, MustNotMsg, ExpectMsg
+from .namespace import namespace
 from .utils import privkey_expand
 from .keyset import KeySet
 from abc import ABC, abstractmethod
@@ -30,6 +33,30 @@ class Conn(object):
 
     def __str__(self) -> str:
         return self.name
+
+
+class RunnerConn(Conn):
+    """Connection handle for procedural send/receive experiments."""
+
+    def __init__(self, connprivkey: str, connection: Any):
+        super().__init__(connprivkey)
+        self.connection = connection
+
+    def recv_msg(self) -> Message:
+        raw_msg = self.connection.read_message()
+        return Message.read(namespace(), io.BytesIO(raw_msg))
+
+    def send_msg(self, msg_name: str, **kwargs: Any) -> None:
+        msgtype = namespace().get_msgtype(msg_name)
+        if not msgtype:
+            raise SpecFileError(self, "Unknown msgtype {}".format(msg_name))
+        msg = Message(msgtype, **kwargs)
+        missing = msg.missing_fields()
+        if missing:
+            raise SpecFileError(self, "Missing fields {}".format(missing))
+        binmsg = io.BytesIO()
+        msg.write(binmsg)
+        self.connection.send_message(binmsg.getvalue())
 
 
 class Runner(ABC):
@@ -142,7 +169,7 @@ class Runner(ABC):
         pass
 
     @abstractmethod
-    def connect(self, event: Event, connprivkey: str) -> None:
+    def connect(self, event: Event, connprivkey: str) -> Conn:
         pass
 
     @abstractmethod
