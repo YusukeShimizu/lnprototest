@@ -1,29 +1,99 @@
 #! /usr/bin/python3
 # #### Dummy runner which you should replace with real one. ####
 import io
-from .runner import Runner, Conn
-from .event import Event, ExpectMsg, MustNotMsg
-from typing import List, Optional
-from .keyset import KeySet
+
+from typing import Any, List
+
 from pyln.proto.message import (
-    Message,
-    FieldType,
     DynamicArrayType,
     EllipsisArrayType,
+    FieldType,
+    Message,
     SizedArrayType,
 )
-from typing import Any
+
+from .boundary import CapabilitySet, ChainBackend, NodeAdapter, PeerSession
+from .event import Event, ExpectMsg, MustNotMsg
+from .keyset import KeySet
+from .runner import Conn, Runner
 
 
-class DummyRunner(Runner):
+class DummyPeerSession(PeerSession):
+    def __init__(self, connprivkey: str, verbose: bool = False):
+        super().__init__(connprivkey)
+        self.verbose = verbose
+
+    def send_raw(self, payload: bytes) -> None:
+        if self.verbose:
+            print("[RECV {}]".format(payload.hex()))
+
+    def recv_raw(self, timeout: int = None) -> bytes:
+        raise RuntimeError("DummyPeerSession does not provide raw reads directly")
+
+    def close(self) -> None:
+        if self.verbose:
+            print("[CLOSE {}]".format(self))
+
+
+class DummyChainBackend(ChainBackend):
     def __init__(self, config: Any):
-        super().__init__(config)
+        self.config = config
+        self.blockheight = 102
 
-    def _is_dummy(self) -> bool:
-        """The DummyRunner returns True here, as it can't do some things"""
-        return True
+    def start(self) -> None:
+        self.blockheight = 102
 
-    def get_keyset(self) -> KeySet:
+    def stop(self) -> None:
+        return
+
+    def restart(self) -> None:
+        self.blockheight = 102
+
+    def block_height(self) -> int:
+        return self.blockheight
+
+    def trim_blocks(self, newheight: int) -> None:
+        if self.config.getoption("verbose"):
+            print("[TRIMBLOCK TO HEIGHT {}]".format(newheight))
+        self.blockheight = newheight
+
+    def mine_blocks(self, event: Event, txs: List[str], n: int) -> None:
+        if self.config.getoption("verbose"):
+            print("[ADDBLOCKS {} WITH {} TXS]".format(n, len(txs)))
+        self.blockheight += n
+
+    def expect_tx(self, event: Event, txid: str) -> None:
+        if self.config.getoption("verbose"):
+            print("[EXPECT-TX {}]".format(txid))
+
+
+class DummyNodeAdapter(NodeAdapter):
+    def __init__(self, config: Any):
+        self.config = config
+        self.running = False
+        self._capabilities = CapabilitySet()
+
+    def is_running(self) -> bool:
+        return self.running
+
+    def start(self) -> None:
+        self.running = True
+
+    def stop(self, print_logs: bool = False) -> None:
+        self.running = False
+
+    def restart(self) -> None:
+        self.running = True
+
+    def open_session(self, connprivkey: str) -> PeerSession:
+        return DummyPeerSession(
+            connprivkey, verbose=bool(self.config.getoption("verbose"))
+        )
+
+    def capabilities(self) -> CapabilitySet:
+        return self._capabilities
+
+    def legacy_get_keyset(self) -> KeySet:
         return KeySet(
             revocation_base_secret="11",
             payment_base_secret="12",
@@ -32,62 +102,17 @@ class DummyRunner(Runner):
             shachain_seed="FF" * 32,
         )
 
-    def add_startup_flag(self, flag: str) -> None:
+    def legacy_add_startup_flag(self, flag: str) -> None:
         if self.config.getoption("verbose"):
             print("[ADD STARTUP FLAG {}]".format(flag))
-        return
 
-    def get_node_privkey(self) -> str:
+    def legacy_get_node_privkey(self) -> str:
         return "01"
 
-    def get_node_bitcoinkey(self) -> str:
+    def legacy_get_node_bitcoinkey(self) -> str:
         return "10"
 
-    def has_option(self, optname: str) -> Optional[str]:
-        return None
-
-    def start(self) -> None:
-        self.blockheight = 102
-
-    def stop(self, print_logs: bool = False) -> None:
-        pass
-
-    def restart(self) -> None:
-        super().restart()
-        if self.config.getoption("verbose"):
-            print("[RESTART]")
-        self.blockheight = 102
-
-    def connect(self, event: Event, connprivkey: str) -> Conn:
-        if self.config.getoption("verbose"):
-            print("[CONNECT {} {}]".format(event, connprivkey))
-        conn = Conn(connprivkey)
-        self.add_conn(conn)
-        return conn
-
-    def getblockheight(self) -> int:
-        return self.blockheight
-
-    def trim_blocks(self, newheight: int) -> None:
-        if self.config.getoption("verbose"):
-            print("[TRIMBLOCK TO HEIGHT {}]".format(newheight))
-        self.blockheight = newheight
-
-    def add_blocks(self, event: Event, txs: List[str], n: int) -> None:
-        if self.config.getoption("verbose"):
-            print("[ADDBLOCKS {} WITH {} TXS]".format(n, len(txs)))
-        self.blockheight += n
-
-    def disconnect(self, event: Event, conn: Conn) -> None:
-        super().disconnect(event, conn)
-        if self.config.getoption("verbose"):
-            print("[DISCONNECT {}]".format(conn))
-
-    def recv(self, event: Event, conn: Conn, outbuf: bytes) -> None:
-        if self.config.getoption("verbose"):
-            print("[RECV {} {}]".format(event, outbuf.hex()))
-
-    def fundchannel(
+    def legacy_fundchannel(
         self,
         event: Event,
         conn: Conn,
@@ -102,7 +127,7 @@ class DummyRunner(Runner):
                 )
             )
 
-    def init_rbf(
+    def legacy_init_rbf(
         self,
         event: Event,
         conn: Conn,
@@ -119,29 +144,63 @@ class DummyRunner(Runner):
                 )
             )
 
-    def invoice(self, event: Event, amount: int, preimage: str) -> None:
+    def legacy_invoice(self, event: Event, amount: int, preimage: str) -> None:
         if self.config.getoption("verbose"):
             print("[INVOICE for {} with PREIMAGE {}]".format(amount, preimage))
 
-    def accept_add_fund(self, event: Event) -> None:
+    def legacy_accept_add_fund(self, event: Event) -> None:
         if self.config.getoption("verbose"):
             print("[ACCEPT_ADD_FUND]")
 
-    def addhtlc(self, event: Event, conn: Conn, amount: int, preimage: str) -> None:
+    def legacy_addhtlc(
+        self, event: Event, conn: Conn, amount: int, preimage: str
+    ) -> None:
         if self.config.getoption("verbose"):
             print(
                 "[ADDHTLC TO {} for {} with PREIMAGE {}]".format(conn, amount, preimage)
             )
 
+    def legacy_close_channel(self, channel_id: str) -> None:
+        if self.config.getoption("verbose"):
+            print("[CLOSE-CHANNEL {}]".format(channel_id))
+
+
+class DummyRunner(Runner):
+    def __init__(self, config: Any):
+        super().__init__(config)
+        self.chain = DummyChainBackend(config)
+        self.node = DummyNodeAdapter(config)
+
+    def _is_dummy(self) -> bool:
+        return True
+
+    def restart(self) -> None:
+        super().restart()
+        if self.config.getoption("verbose"):
+            print("[RESTART]")
+
+    def connect(self, event: Event, connprivkey: str) -> Conn:
+        if self.config.getoption("verbose"):
+            print("[CONNECT {} {}]".format(event, connprivkey))
+        return super().connect(event, connprivkey)
+
+    def disconnect(self, event: Event, conn: Conn) -> None:
+        super().disconnect(event, conn)
+        if self.config.getoption("verbose"):
+            print("[DISCONNECT {}]".format(conn))
+
+    def recv(self, event: Event, conn: Conn, outbuf: bytes) -> None:
+        if self.config.getoption("verbose"):
+            print("[RECV {} {}]".format(event, outbuf.hex()))
+        super().recv(event, conn, outbuf)
+
     @staticmethod
     def fake_field(ftype: FieldType) -> str:
         if isinstance(ftype, DynamicArrayType) or isinstance(ftype, EllipsisArrayType):
-            # Byte arrays are literal hex strings
             if ftype.elemtype.name == "byte":
                 return ""
             return "[]"
-        elif isinstance(ftype, SizedArrayType):
-            # Byte arrays are literal hex strings
+        if isinstance(ftype, SizedArrayType):
             if ftype.elemtype.name == "byte":
                 return "00" * ftype.arraysize
             return (
@@ -149,7 +208,7 @@ class DummyRunner(Runner):
                 + ",".join([DummyRunner.fake_field(ftype.elemtype)] * ftype.arraysize)
                 + "]"
             )
-        elif ftype.name in (
+        if ftype.name in (
             "byte",
             "u8",
             "u16",
@@ -162,40 +221,30 @@ class DummyRunner(Runner):
             "varint",
         ):
             return "0"
-        elif ftype.name in ("chain_hash", "channel_id", "sha256"):
+        if ftype.name in ("chain_hash", "channel_id", "sha256"):
             return "00" * 32
-        elif ftype.name == "point":
+        if ftype.name == "point":
             return "038f1573b4238a986470d250ce87c7a91257b6ba3baf2a0b14380c4e1e532c209d"
-        elif ftype.name == "short_channel_id":
+        if ftype.name == "short_channel_id":
             return "0x0x0"
-        elif ftype.name == "signature":
+        if ftype.name == "signature":
             return "01" * 64
-        else:
-            raise NotImplementedError(
-                "don't know how to fake {} type!".format(ftype.name)
-            )
+        raise NotImplementedError("don't know how to fake {} type!".format(ftype.name))
 
-    def get_output_message(self, conn: Conn, event: ExpectMsg) -> Optional[bytes]:
+    def get_output_message(self, conn: Conn, event: ExpectMsg) -> bytes:
         if self.config.getoption("verbose"):
             print("[GET_OUTPUT_MESSAGE {}]".format(conn))
 
-        # We make the message they were expecting.
         msg = Message(event.msgtype, **event.resolve_args(self, event.kwargs))
-
-        # Fake up the other fields.
-        for m in msg.missing_fields():
-            ftype = msg.messagetype.find_field(m.name)
-            msg.set_field(m.name, self.fake_field(ftype.fieldtype))
+        for missing_field in msg.missing_fields():
+            field_type = msg.messagetype.find_field(missing_field.name)
+            msg.set_field(missing_field.name, self.fake_field(field_type.fieldtype))
 
         binmsg = io.BytesIO()
         msg.write(binmsg)
         return binmsg.getvalue()
 
-    def expect_tx(self, event: Event, txid: str) -> None:
-        if self.config.getoption("verbose"):
-            print("[EXPECT-TX {}]".format(txid))
-
-    def check_error(self, event: Event, conn: Conn) -> Optional[str]:
+    def check_error(self, event: Event, conn: Conn) -> str:
         super().check_error(event, conn)
         if self.config.getoption("verbose"):
             print("[CHECK-ERROR {}]".format(event))
@@ -208,15 +257,4 @@ class DummyRunner(Runner):
         expected: bool,
         must_not_events: List[MustNotMsg],
     ) -> None:
-        pass
-
-    def close_channel(self, channel_id: str) -> bool:
-        if self.config.getoption("verbose"):
-            print("[CLOSE-CHANNEL {}]".format(channel_id))
-        return True
-
-    def is_running(self) -> bool:
-        return True
-
-    def teardown(self):
         pass

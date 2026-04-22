@@ -1,78 +1,37 @@
 #! /usr/bin/python3
-import io
+import functools
 import logging
 import shutil
 import tempfile
 
 import coincurve
-import functools
-from pyln.proto.message import Message
+
+from typing import Any, Callable, Dict, List, Optional, Union
 
 from .bitfield import bitfield
+from .boundary import ChainBackend, NodeAdapter, PeerSession
 from .errors import SpecFileError
-from .structure import Sequence
-from .event import Event, MustNotMsg, ExpectMsg
-from .namespace import namespace
-from .utils import privkey_expand
+from .event import Event, ExpectMsg
 from .keyset import KeySet
-from abc import ABC, abstractmethod
-from typing import Dict, Optional, List, Union, Any, Callable
+from .structure import Sequence
+from .utils import privkey_expand
 
 
-class Conn(object):
-    """Class for connections.  Details filled in by the particular runner."""
-
-    def __init__(self, connprivkey: str):
-        """Create a connection from a node with the given hex privkey: we use
-        trivial values for private keys, so we simply left-pad with zeroes"""
-        self.name = connprivkey
-        self.connprivkey = privkey_expand(connprivkey)
-        self.pubkey = coincurve.PublicKey.from_secret(self.connprivkey.secret)
-        self.expected_error = False
-        self.must_not_events: List[MustNotMsg] = []
-
-    def __str__(self) -> str:
-        return self.name
+Conn = PeerSession
+RunnerConn = PeerSession
 
 
-class RunnerConn(Conn):
-    """Connection handle for procedural send/receive experiments."""
-
-    def __init__(self, connprivkey: str, connection: Any):
-        super().__init__(connprivkey)
-        self.connection = connection
-
-    def recv_msg(self) -> Message:
-        raw_msg = self.connection.read_message()
-        return Message.read(namespace(), io.BytesIO(raw_msg))
-
-    def send_msg(self, msg_name: str, **kwargs: Any) -> None:
-        msgtype = namespace().get_msgtype(msg_name)
-        if not msgtype:
-            raise SpecFileError(self, "Unknown msgtype {}".format(msg_name))
-        msg = Message(msgtype, **kwargs)
-        missing = msg.missing_fields()
-        if missing:
-            raise SpecFileError(self, "Missing fields {}".format(missing))
-        binmsg = io.BytesIO()
-        msg.write(binmsg)
-        self.connection.send_message(binmsg.getvalue())
-
-
-class Runner(ABC):
-    """Abstract base class for runners.
-
-    Most of the runner parameters can be extracted at runtime, but we do
-    require that minimum_depth be 3, just for test simplicity.
-    """
+class LegacyRunnerAdapter:
+    """Compatibility layer that keeps the Event DSL running on top of the new boundary."""
 
     def __init__(self, config: Any):
         self.config = config
         self.directory = tempfile.mkdtemp(prefix="lnpt-cl-")
-        # key == connprivkey, value == Conn
         self.conns: Dict[str, Conn] = {}
         self.last_conn: Optional[Conn] = None
         self.stash: Dict[str, Dict[str, Any]] = {}
+        self.node: Optional[NodeAdapter] = None
+        self.chain: Optional[ChainBackend] = None
         self.logger = logging.getLogger(__name__)
         if self.config.getoption("verbose"):
             self.logger.setLevel(logging.DEBUG)
@@ -80,11 +39,19 @@ class Runner(ABC):
             self.logger.setLevel(logging.INFO)
 
     def _is_dummy(self) -> bool:
-        """The DummyRunner returns True here, as it can't do some things"""
         return False
 
+    def _node(self) -> NodeAdapter:
+        if self.node is None:
+            raise RuntimeError("node adapter is not configured")
+        return self.node
+
+    def _chain(self) -> ChainBackend:
+        if self.chain is None:
+            raise RuntimeError("chain backend is not configured")
+        return self.chain
+
     def find_conn(self, connprivkey: Optional[str]) -> Optional[Conn]:
-        # Default is whatever we specified last.
         if connprivkey is None:
             return self.last_conn
         if connprivkey in self.conns:
@@ -107,19 +74,29 @@ class Runner(ABC):
         return None
 
     def post_check(self, sequence: Sequence) -> None:
-        # Make sure no connection had an error.
         for conn_name in list(self.conns.keys()):
             logging.debug(
                 f"disconnection connection with key={conn_name} and value={self.conns[conn_name]}"
             )
             self.disconnect(sequence, self.conns[conn_name])
 
+    def _close_connections(self) -> None:
+        for conn in list(self.conns.values()):
+            try:
+                conn.close()
+            except Exception as ex:
+                logging.debug(f"ignoring connection close failure: {ex}")
+
     def restart(self) -> None:
+        self._close_connections()
         self.conns = {}
         self.last_conn = None
         self.stash = {}
+        if self._node().is_running():
+            self._node().stop()
+        self._chain().restart()
+        self._node().start()
 
-    # FIXME: Why can't we use SequenceUnion here?
     def run(self, events: Union[Sequence, List[Event], Event]) -> None:
         sequence = Sequence(events)
         self.start()
@@ -132,115 +109,83 @@ class Runner(ABC):
             self.restart()
 
     def add_stash(self, stashname: str, vals: Any) -> None:
-        """Add a dict to the stash."""
         self.stash[stashname] = vals
 
     def get_stash(self, event: Event, stashname: str, default: Any = None) -> Any:
-        """Get an entry from the stash."""
         if stashname not in self.stash:
             if default is not None:
                 return default
             raise SpecFileError(event, "Unknown stash name {}".format(stashname))
         return self.stash[stashname]
 
-    def teardown(self):
-        """The Teardown method is called at the end of the test,
-        and it is used to clean up the root dir where the tests are run."""
-        shutil.rmtree(self.directory)
+    def teardown(self) -> None:
+        self._node().teardown()
+        self._chain().teardown()
+        shutil.rmtree(self.directory, ignore_errors=True)
 
     def runner_features(
         self,
         additional_features: Optional[List[int]] = None,
         globals: bool = False,
     ) -> str:
-        """
-        Provide the features required by the node.
-        """
         if additional_features is None:
             return ""
-        else:
-            return bitfield(*additional_features)
+        return bitfield(*additional_features)
 
-    @abstractmethod
     def is_running(self) -> bool:
-        """Return a boolean value that tells whether the runner is running
-        or not.
-        Is leave up to the runner implementation to keep the runner state"""
-        pass
+        return self._node().is_running()
 
-    @abstractmethod
     def connect(self, event: Event, connprivkey: str) -> Conn:
-        pass
+        conn = self._node().open_session(connprivkey)
+        self.add_conn(conn)
+        return conn
 
-    @abstractmethod
-    def check_final_error(
-        self,
-        event: Event,
-        conn: Conn,
-        expected: bool,
-        must_not_events: List[MustNotMsg],
-    ) -> None:
-        pass
-
-    @abstractmethod
     def start(self) -> None:
-        pass
+        self._chain().start()
+        self._node().start()
 
-    @abstractmethod
     def stop(self, print_logs: bool = False) -> None:
-        """
-        Stop the runner, and print all the log that the ln
-        implementation produced.
+        self._close_connections()
+        if self._node().is_running():
+            self._node().stop(print_logs=print_logs)
+        self._chain().stop()
 
-        Print the log is useful when we have a failure e we need
-        to debug what happens during the tests.
-        """
-        pass
-
-    @abstractmethod
     def recv(self, event: Event, conn: Conn, outbuf: bytes) -> None:
-        pass
+        conn.send_raw(outbuf)
 
-    @abstractmethod
     def get_output_message(self, conn: Conn, event: ExpectMsg) -> Optional[bytes]:
-        pass
+        return conn.recv_raw()
 
-    @abstractmethod
     def getblockheight(self) -> int:
-        pass
+        return self._chain().block_height()
 
-    @abstractmethod
     def trim_blocks(self, newheight: int) -> None:
-        pass
+        self._chain().trim_blocks(newheight)
 
-    @abstractmethod
     def add_blocks(self, event: Event, txs: List[str], n: int) -> None:
-        pass
+        self._chain().mine_blocks(event, txs, n)
 
-    @abstractmethod
     def expect_tx(self, event: Event, txid: str) -> None:
-        pass
+        self._chain().expect_tx(event, txid)
 
-    @abstractmethod
     def invoice(self, event: Event, amount: int, preimage: str) -> None:
-        pass
+        self._node().legacy_invoice(event, amount, preimage)
 
-    @abstractmethod
     def accept_add_fund(self, event: Event) -> None:
-        pass
+        self._node().legacy_accept_add_fund(event)
 
-    @abstractmethod
     def fundchannel(
         self,
         event: Event,
         conn: Conn,
         amount: int,
-        feerate: int = 0,
+        feerate: int = 253,
         expect_fail: bool = False,
     ) -> None:
-        pass
+        self._node().legacy_fundchannel(
+            event, conn, amount, feerate=feerate, expect_fail=expect_fail
+        )
 
-    @abstractmethod
     def init_rbf(
         self,
         event: Event,
@@ -251,43 +196,51 @@ class Runner(ABC):
         utxo_outnum: int,
         feerate: int,
     ) -> None:
-        pass
+        self._node().legacy_init_rbf(
+            event,
+            conn,
+            channel_id,
+            amount,
+            utxo_txid,
+            utxo_outnum,
+            feerate,
+        )
 
-    @abstractmethod
     def addhtlc(self, event: Event, conn: Conn, amount: int, preimage: str) -> None:
-        pass
+        self._node().legacy_addhtlc(event, conn, amount, preimage)
 
-    @abstractmethod
     def get_keyset(self) -> KeySet:
-        pass
+        return self._node().legacy_get_keyset()
 
-    @abstractmethod
     def get_node_privkey(self) -> str:
-        pass
+        return self._node().legacy_get_node_privkey()
 
-    @abstractmethod
     def get_node_bitcoinkey(self) -> str:
-        pass
+        return self._node().legacy_get_node_bitcoinkey()
 
-    @abstractmethod
     def has_option(self, optname: str) -> Optional[str]:
-        pass
+        return self._node().capabilities().legacy_has_option(optname)
 
-    @abstractmethod
     def add_startup_flag(self, flag: str) -> None:
-        pass
+        self._node().legacy_add_startup_flag(flag)
 
-    @abstractmethod
     def close_channel(self, channel_id: str) -> None:
-        """
-        Close the channel with the specified channel id.
+        self._node().legacy_close_channel(channel_id)
 
-        :param channel_id:  the channel id as string value where the
-        caller want to close;
-        :return No value in case of success is expected,
-        but an `RpcError` is expected in case of err.
-        """
-        pass
+    def check_final_error(
+        self,
+        event: Event,
+        conn: Conn,
+        expected: bool,
+        must_not_events: List[Any],
+    ) -> None:
+        conn.close()
+
+
+class Runner(LegacyRunnerAdapter):
+    """Compatibility name kept for tests and external runners."""
+
+    pass
 
 
 def remote_revocation_basepoint() -> Callable[[Runner, Event, str], str]:

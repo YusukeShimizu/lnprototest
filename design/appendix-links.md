@@ -2,7 +2,7 @@
 
 確認基準日: 2026-04-22 JST
 
-この appendix は `design/` bundle で参照する source と、その取り扱い方針をまとめる。`report/` 側の [`appendix-evidence.md`](../report/lnprototest-architecture/appendix-evidence.md) が詳細な証拠台帳であり、ここでは設計判断に直接関係する URL と引用方針だけを抜き出す。
+この appendix は `design/` bundle で参照する source と、その取り扱い方針をまとめる。ここでは設計判断に直接関係する URL と引用方針だけを残し、実装時に必要な evidence anchor をこの bundle 内で完結させる。
 
 ## Public Sources
 
@@ -50,4 +50,4 @@ Discord 由来の記述を本文で使うときは、「ユーザー提供の Di
 - absolute date が意味を持つ場合は日付を書く
 - private Discord は補助資料と明記する
 
-このルールで、`report/` の narrative と `design/` の decision-complete prose の間で、source boundary が曖昧にならないようにする。
+このルールで、design bundle の decision-complete prose と公開 source の対応関係が曖昧にならないようにする。

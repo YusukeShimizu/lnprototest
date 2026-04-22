@@ -42,8 +42,17 @@ from .event import (
 )
 
 from .structure import Sequence, OneOf, AnyOrder, TryAll
+from .boundary import (
+    CapabilityInfo,
+    CapabilityLevel,
+    CapabilitySet,
+    ChainBackend,
+    NodeAdapter,
+    PeerSession,
+)
 
 from .runner import (
+    LegacyRunnerAdapter,
     Runner,
     Conn,
     RunnerConn,
@@ -122,6 +131,13 @@ __all__ = [
     "SigType",
     "Sig",
     "DummyRunner",
+    "CapabilityInfo",
+    "CapabilityLevel",
+    "CapabilitySet",
+    "ChainBackend",
+    "NodeAdapter",
+    "PeerSession",
+    "LegacyRunnerAdapter",
     "Runner",
     "Conn",
     "RunnerConn",
@@ -150,7 +166,6 @@ __all__ = [
     "AcceptFunding",
     "CreateFunding",
     "Funding",
-    "regtest_hash",
     "privkey_expand",
     "Wait",
     "dual_fund_csv",

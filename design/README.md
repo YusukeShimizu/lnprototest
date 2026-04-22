@@ -2,7 +2,7 @@
 
 この `design/` ディレクトリは、`lnprototest` の設計判断を implementation-oriented に固定するための bundle である。ここでの読者は、次のコード変更を実際に進めるエンジニアや別 agent であり、「背景を理解する」だけでなく「どの順番で、何を、どこまで決めた設計として扱うか」を追加判断なしで読めることを目標にする。
 
-既存の [`report/lnprototest-architecture/`](../report/lnprototest-architecture/README.md) は背景分析と証拠整理を担い、この `design/` は設計判断そのものを担う。両者は置き換え関係ではなく並行運用とし、`report/` は「なぜそう考えるか」、`design/` は「何をそう決めるか」に役割を分ける。
+この fork では、`design/` を implementation-facing な設計入口として扱う。背景分析の補助資料は public issue / PR / prototype への link として appendix に集約し、実装時に最初に読むべきものはこの bundle だと固定する。
 
 この bundle で固定する設計軸は三つだけである。第一に、fat `Runner` contract をどの責務に分解するか。第二に、Event DSL / procedural API / decorator DAG の議論をどう整理するか。第三に、runner と node の疎結合化をどの transport 順で進めるかである。これらはしばしば一つの redesign として語られるが、実際には別々の設計判断であり、着手順も異なる。
 

@@ -5,46 +5,37 @@
 # https://creativecommons.org/publicdomain/zero/1.0/
 
 import hashlib
-import pyln.client
-import pyln.proto.wire
-import os
-import subprocess
-import lnprototest
-import bitcoin.core
-import struct
-import shutil
 import logging
+import os
+import shutil
 import socket
+import struct
+import subprocess
 import time
 
+from concurrent import futures
 from contextlib import closing
 from datetime import date
-from concurrent import futures
+from typing import Any, Callable, Dict, List, Optional, cast
+
+import bitcoin.core
+import lnprototest
+import pyln.client
+import pyln.proto.wire
+
+from lnprototest import Event, EventError, MustNotMsg, namespace, wait_for
 from lnprototest.backend import Bitcoind
-from lnprototest import (
-    Event,
-    EventError,
-    SpecFileError,
-    KeySet,
-    Conn,
-    RunnerConn,
-    namespace,
-    MustNotMsg,
-)
-from lnprototest import wait_for
-from typing import Dict, Any, Callable, List, Optional, cast
+from lnprototest.boundary import CapabilitySet, ChainBackend, NodeAdapter, PeerSession
 
 TIMEOUT = int(os.getenv("TIMEOUT", "60"))
 LIGHTNING_SRC = os.path.join(os.getcwd(), os.getenv("LIGHTNING_SRC", "../lightning/"))
 
 
-class CLightningConn(RunnerConn):
+class CLightningPeerSession(PeerSession):
     def __init__(self, connprivkey: str, port: int):
         privkey = lnprototest.privkey_expand(connprivkey)
-        # FIXME: pyln.proto.wire should just use coincurve PrivateKey!
-        connection = pyln.proto.wire.connect(
+        self.connection = pyln.proto.wire.connect(
             pyln.proto.wire.PrivateKey(bytes.fromhex(privkey.to_hex())),
-            # FIXME: Ask node for pubkey
             pyln.proto.wire.PublicKey(
                 bytes.fromhex(
                     "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
@@ -53,27 +44,99 @@ class CLightningConn(RunnerConn):
             "127.0.0.1",
             port,
         )
-        super().__init__(connprivkey, connection)
+        super().__init__(connprivkey)
+
+    def send_raw(self, payload: bytes) -> None:
+        self.connection.send_message(payload)
+
+    def recv_raw(self, timeout: Optional[int] = None) -> bytes:
+        return self.connection.read_message()
+
+    def close(self) -> None:
+        self.connection.connection.close()
 
 
-class Runner(lnprototest.Runner):
-    def __init__(self, config: Any):
-        super().__init__(config)
+class CLightningChainBackend(ChainBackend):
+    def __init__(self, basedir: str):
+        self.basedir = basedir
+        self.bitcoind: Optional[Bitcoind] = None
+        self._node_height: Optional[Callable[[], int]] = None
+
+    def set_node_height(self, callback: Callable[[], int]) -> None:
+        self._node_height = callback
+
+    def _bitcoind(self) -> Bitcoind:
+        if self.bitcoind is None:
+            raise RuntimeError("bitcoind is not initialized")
+        return self.bitcoind
+
+    def start(self) -> None:
+        if self.bitcoind is None:
+            self.bitcoind = Bitcoind(self.basedir)
+        self.bitcoind.start()
+
+    def stop(self) -> None:
+        if self.bitcoind is not None:
+            self.bitcoind.stop()
+
+    def restart(self) -> None:
+        if self.bitcoind is None:
+            self.start()
+            return
+        self.bitcoind.restart()
+
+    def block_height(self) -> int:
+        return self._bitcoind().rpc.getblockcount()
+
+    def trim_blocks(self, newheight: int) -> None:
+        block_hash = self._bitcoind().rpc.getblockhash(newheight + 1)
+        self._bitcoind().rpc.invalidateblock(block_hash)
+
+    def mine_blocks(self, event: Event, txs: List[str], n: int) -> None:
+        for tx in txs:
+            self._bitcoind().rpc.sendrawtransaction(tx)
+        self._bitcoind().rpc.generatetoaddress(n, self._bitcoind().rpc.getnewaddress())
+        if self._node_height is not None:
+            wait_for(lambda: self._node_height() == self.block_height())
+
+    def expect_tx(self, event: Event, txid: str) -> None:
+        revtxid = bitcoin.core.lx(txid).hex()
+        try:
+            wait_for(lambda: revtxid in self._bitcoind().rpc.getrawmempool())
+        except ValueError:
+            raise EventError(
+                event,
+                "Did not broadcast the txid {}, just {}".format(
+                    revtxid,
+                    [
+                        (mempool_txid, self._bitcoind().rpc.getrawtransaction(mempool_txid))
+                        for mempool_txid in self._bitcoind().rpc.getrawmempool()
+                    ],
+                ),
+            )
+
+
+class CLightningNodeAdapter(NodeAdapter):
+    def __init__(self, config: Any, basedir: str, chain: CLightningChainBackend):
+        self.config = config
+        self.basedir = basedir
+        self.chain = chain
         self.running = False
-        self.rpc = None
-        self.bitcoind = None
-        self.proc = None
+        self.rpc: Optional[pyln.client.LightningRpc] = None
+        self.proc: Optional[subprocess.Popen[Any]] = None
         self.cleanup_callbacks: List[Callable[[], None]] = []
         self.fundchannel_future: Optional[Any] = None
         self.is_fundchannel_kill = False
         self.executor = futures.ThreadPoolExecutor(max_workers=20)
+        self.startup_flags = [
+            "--{}".format(flag) for flag in config.getoption("runner_args")
+        ]
+        self._capabilities = self._load_capabilities()
+        self.lightning_dir = os.path.join(self.basedir, "lightningd")
+        self.lightning_port: Optional[int] = None
 
-        self.startup_flags = []
-        for flag in config.getoption("runner_args"):
-            self.startup_flags.append("--{}".format(flag))
-
-        # Does it support (i.e. require!) --developer?
-        ret = subprocess.Popen(
+    def _load_capabilities(self) -> CapabilitySet:
+        ret = subprocess.run(
             [
                 "{}/lightningd/lightningd".format(LIGHTNING_SRC),
                 "--developer",
@@ -85,7 +148,7 @@ class Runner(lnprototest.Runner):
         if ret.returncode != 0:
             self.startup_flags.append("--developer")
 
-        opts = (
+        feature_lines = (
             subprocess.run(
                 [
                     "{}/lightningd/lightningd".format(LIGHTNING_SRC),
@@ -97,62 +160,28 @@ class Runner(lnprototest.Runner):
             .stdout.decode("utf-8")
             .splitlines()
         )
-        self.options: Dict[str, str] = {}
-        for o in opts:
-            if o.startswith("supports_"):
-                self.options[o] = "true"
-            else:
-                k, v = o.split("/")
-                self.options[k] = v
+        return CapabilitySet.from_cln_feature_lines(feature_lines)
+
+    def capabilities(self) -> CapabilitySet:
+        return self._capabilities
 
     def __reserve(self) -> int:
-        """
-        When python asks for a free port from the os, it is possible that
-        with concurrent access, the port that is picked is a port that is not free
-        anymore when we go to bind the daemon like bitcoind port.
-
-        Source: https://stackoverflow.com/questions/1365265/on-localhost-how-do-i-pick-a-free-port-number
-        """
-        with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
-            s.bind(("", 0))
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            return s.getsockname()[1]
+        with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
+            sock.bind(("", 0))
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            return sock.getsockname()[1]
 
     def __init_sandbox_dir(self) -> None:
-        """Create the tmp directory for lnprotest and lightningd"""
-        self.lightning_dir = os.path.join(self.directory, "lightningd")
         if not os.path.exists(self.lightning_dir):
             os.makedirs(self.lightning_dir)
-
-    def get_keyset(self) -> KeySet:
-        return KeySet(
-            revocation_base_secret="0000000000000000000000000000000000000000000000000000000000000011",
-            payment_base_secret="0000000000000000000000000000000000000000000000000000000000000012",
-            delayed_payment_base_secret="0000000000000000000000000000000000000000000000000000000000000013",
-            htlc_base_secret="0000000000000000000000000000000000000000000000000000000000000014",
-            shachain_seed="FF" * 32,
-        )
-
-    def get_node_privkey(self) -> str:
-        return "01"
-
-    def get_node_bitcoinkey(self) -> str:
-        return "0000000000000000000000000000000000000000000000000000000000000010"
 
     def is_running(self) -> bool:
         return self.running
 
-    def start(self, also_bitcoind: bool = True) -> None:
-        self.logger.debug("[START]")
+    def start(self) -> None:
         self.__init_sandbox_dir()
         self.lightning_port = self.__reserve()
-        if also_bitcoind:
-            self.bitcoind = Bitcoind(self.directory)
-            try:
-                self.bitcoind.start()
-            except Exception as ex:
-                self.logger.debug(f"Exception with message {ex}")
-            self.logger.debug("RUN Bitcoind")
+        bitcoind = self.chain._bitcoind()
         self.proc = subprocess.Popen(
             [
                 "{}/lightningd/lightningd".format(LIGHTNING_SRC),
@@ -169,18 +198,17 @@ class Runner(lnprototest.Runner):
                 "--network=regtest",
                 "--bitcoin-rpcuser=rpcuser",
                 "--bitcoin-rpcpassword=rpcpass",
-                f"--bitcoin-rpcconnect=127.0.0.1:{self.bitcoind.port}",
+                f"--bitcoin-rpcconnect=127.0.0.1:{bitcoind.port}",
                 "--log-level=debug",
                 "--log-file=log",
                 "--htlc-maximum-msat=2000sat",
             ]
             + self.startup_flags
         )
-        self.running = True
         self.rpc = pyln.client.LightningRpc(
             os.path.join(self.lightning_dir, "regtest", "lightning-rpc")
         )
-        self.logger.debug("RUN core-lightning")
+        self.running = True
 
         def node_ready(rpc: pyln.client.LightningRpc) -> bool:
             try:
@@ -191,140 +219,101 @@ class Runner(lnprototest.Runner):
                 return False
 
         wait_for(lambda: node_ready(self.rpc), timeout=TIMEOUT)
-        logging.debug("Waited for core-lightning")
-
-        # Make sure that we see any funds that come to our wallet
-        for i in range(5):
+        self.chain.set_node_height(lambda: self.rpc.getinfo()["blockheight"])
+        for _ in range(5):
             self.rpc.newaddr()
 
-    def shutdown(self, also_bitcoind: bool = True) -> None:
-        for cb in self.cleanup_callbacks:
+    def stop(self, print_logs: bool = False) -> None:
+        if not self.running or self.rpc is None:
+            return
+        for cb in list(self.cleanup_callbacks):
             cb()
+        self.cleanup_callbacks = []
         self.rpc.stop()
-        if also_bitcoind:
-            self.bitcoind.stop()
-
-    def stop(self, print_logs: bool = False, also_bitcoind: bool = True) -> None:
-        self.logger.debug("[STOP]")
-        self.shutdown(also_bitcoind=also_bitcoind)
+        if self.proc is not None:
+            try:
+                self.proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+                self.proc.wait(timeout=5)
+            self.proc = None
+        self.rpc = None
+        self.lightning_port = None
         self.running = False
-        for c in self.conns.values():
-            cast(CLightningConn, c).connection.connection.close()
         if print_logs:
             log_path = f"{self.lightning_dir}/regtest/log"
-            with open(log_path) as log:
-                self.logger.info("---------- core-lightning logging ----------------")
-                self.logger.info(log.read())
-                # now we make a backup of the log
-                shutil.copy(
-                    log_path,
-                    f'/tmp/c-lightning-log_{date.today().strftime("%b-%d-%Y_%H:%M:%S")}',
-                )
-        shutil.rmtree(os.path.join(self.lightning_dir, "regtest"))
+            if os.path.exists(log_path):
+                with open(log_path) as log:
+                    logging.info("---------- core-lightning logging ----------------")
+                    logging.info(log.read())
+                    shutil.copy(
+                        log_path,
+                        f'/tmp/c-lightning-log_{date.today().strftime("%b-%d-%Y_%H:%M:%S")}',
+                    )
+        regtest_dir = os.path.join(self.lightning_dir, "regtest")
+        if os.path.exists(regtest_dir):
+            shutil.rmtree(regtest_dir, ignore_errors=True)
 
     def restart(self) -> None:
-        self.logger.debug("[RESTART]")
-        self.stop(also_bitcoind=False)
-        # Make a clean start
-        super().restart()
-        self.bitcoind.restart()
-        self.start(also_bitcoind=False)
+        self.stop()
+        self.start()
 
-    def connect(self, _: Event, connprivkey: str) -> RunnerConn:
-        conn = CLightningConn(connprivkey, self.lightning_port)
-        self.add_conn(conn)
-        return conn
+    def open_session(self, connprivkey: str) -> PeerSession:
+        if self.lightning_port is None:
+            raise RuntimeError("lightning port is not initialized")
+        return CLightningPeerSession(connprivkey, self.lightning_port)
 
-    def getblockheight(self) -> int:
-        return self.bitcoind.rpc.getblockcount()
+    def legacy_get_keyset(self) -> lnprototest.KeySet:
+        return lnprototest.KeySet(
+            revocation_base_secret="0000000000000000000000000000000000000000000000000000000000000011",
+            payment_base_secret="0000000000000000000000000000000000000000000000000000000000000012",
+            delayed_payment_base_secret="0000000000000000000000000000000000000000000000000000000000000013",
+            htlc_base_secret="0000000000000000000000000000000000000000000000000000000000000014",
+            shachain_seed="FF" * 32,
+        )
 
-    def trim_blocks(self, newheight: int) -> None:
-        h = self.bitcoind.rpc.getblockhash(newheight + 1)
-        self.bitcoind.rpc.invalidateblock(h)
+    def legacy_get_node_privkey(self) -> str:
+        return "01"
 
-    def add_blocks(self, event: Event, txs: List[str], n: int) -> None:
-        for tx in txs:
-            self.bitcoind.rpc.sendrawtransaction(tx)
-        self.bitcoind.rpc.generatetoaddress(n, self.bitcoind.rpc.getnewaddress())
+    def legacy_get_node_bitcoinkey(self) -> str:
+        return "0000000000000000000000000000000000000000000000000000000000000010"
 
-        wait_for(lambda: self.rpc.getinfo()["blockheight"] == self.getblockheight())
+    def legacy_add_startup_flag(self, flag: str) -> None:
+        logging.debug("[ADD STARTUP FLAG '{}']".format(flag))
+        self.startup_flags.append("--{}".format(flag))
 
-    def recv(self, event: Event, conn: Conn, outbuf: bytes) -> None:
-        try:
-            cast(CLightningConn, conn).connection.send_message(outbuf)
-        except BrokenPipeError:
-            # This happens when they've sent an error and closed; try
-            # reading it to figure out what went wrong.
-            fut = self.executor.submit(
-                cast(CLightningConn, conn).connection.read_message
-            )
-            try:
-                msg = fut.result(1)
-            except futures.TimeoutError:
-                msg = None
-            if msg:
-                raise EventError(
-                    event, "Connection closed after sending {}".format(msg.hex())
-                )
-            else:
-                raise EventError(event, "Connection closed")
-
-    def fundchannel(
+    def legacy_fundchannel(
         self,
         event: Event,
-        conn: Conn,
+        conn: PeerSession,
         amount: int,
         feerate: int = 253,
         expect_fail: bool = False,
     ) -> None:
-        """
-        event       - the event which cause this, for error logging
-        conn        - which conn (i.e. peer) to fund.
-        amount      - amount to fund the channel with
-        feerate     - feerate, in kiloweights
-        expect_fail - true if this command is expected to error/fail
-        """
-        # First, check that another fundchannel isn't already running
-        if self.fundchannel_future:
-            if not self.fundchannel_future.done():
-                raise RuntimeError(
-                    "{} called fundchannel while another channel funding (fundchannel/init_rbf) is still in process".format(
-                        event
-                    )
+        if self.fundchannel_future and not self.fundchannel_future.done():
+            raise RuntimeError(
+                "{} called fundchannel while another channel funding (fundchannel/init_rbf) is still in process".format(
+                    event
                 )
-            self.fundchannel_future = None
+            )
+        self.fundchannel_future = None
 
         def _fundchannel(
-            runner: Runner,
-            conn: Conn,
+            node: CLightningNodeAdapter,
+            peer_session: PeerSession,
             amount: int,
             feerate: int,
             expect_fail: bool = False,
         ) -> str:
-            peer_id = conn.pubkey.format().hex()
-            # Need to supply feerate here, since regtest cannot estimate fees
+            peer_id = peer_session.pubkey.format().hex()
             try:
                 return (
-                    runner.rpc.fundchannel(
+                    node.rpc.fundchannel(
                         peer_id, amount, feerate="{}perkw".format(feerate)
                     ),
                     False,
                 )
             except Exception as ex:
-                # FIXME: this should not return None
-                # but for now that we do not have any
-                # use case where returni value is needed
-                # we keep return null.
-                #
-                # The main reason to do this mess
-                # is that in lnprototest do not have
-                # any custom way to report a spec violation
-                # failure, so for this reason we have different exception
-                # at the same time (because this mess is needed to make stuff async
-                # and look at exchanged message before finish the call). So
-                # the solution is that we log the RPC exception (this may cause a spec
-                # validation failure) and we care just the lnprototest exception as
-                # real reason to abort.
                 logging.error(f"{ex}")
                 return str(ex), True
 
@@ -334,22 +323,16 @@ class Runner(lnprototest.Runner):
                 raise Exception(result)
             self.fundchannel_future = None
             self.is_fundchannel_kill = False
-            self.cleanup_callbacks.remove(self.kill_fundchannel)
+            if self.kill_fundchannel in self.cleanup_callbacks:
+                self.cleanup_callbacks.remove(self.kill_fundchannel)
 
-        # FIXME core lightning has a race condition
-        # when the core lightning node will go to fund the channel
-        # but it will go to to connect with the node before
-        # This required some more analysis from core lightning side
         time.sleep(1)
-
-        fut = self.executor.submit(
-            _fundchannel, self, conn, amount, feerate, expect_fail
-        )
+        fut = self.executor.submit(_fundchannel, self, conn, amount, feerate, expect_fail)
         fut.add_done_callback(_done)
         self.fundchannel_future = fut
         self.cleanup_callbacks.append(self.kill_fundchannel)
 
-    def close_channel(self, channel_id: str) -> None:
+    def legacy_close_channel(self, channel_id: str) -> None:
         logging.debug("[CLOSE CHANNEL with channel id: '{}']".format(channel_id))
         self.rpc.close(peer_id=channel_id)
 
@@ -357,19 +340,16 @@ class Runner(lnprototest.Runner):
         fut = self.fundchannel_future
         self.fundchannel_future = None
         self.is_fundchannel_kill = True
-
         if fut:
             try:
                 fut.result(0)
-            except (SpecFileError, futures.TimeoutError):
+            except futures.TimeoutError:
                 pass
-            except Exception as ex:
-                raise ex from None
 
-    def init_rbf(
+    def legacy_init_rbf(
         self,
         event: Event,
-        conn: Conn,
+        conn: PeerSession,
         channel_id: str,
         amount: int,
         utxo_txid: str,
@@ -379,8 +359,7 @@ class Runner(lnprototest.Runner):
         if self.fundchannel_future:
             self.kill_fundchannel()
 
-        startweight = 42 + 172  # base weight, funding output
-        # Build a utxo using the given utxo
+        startweight = 42 + 172
         fmt_feerate = "{}perkw".format(feerate)
         utxos = ["{}:{}".format(utxo_txid, utxo_outnum)]
         initial_psbt = self.rpc.utxopsbt(
@@ -394,27 +373,20 @@ class Runner(lnprototest.Runner):
             excess_as_change=True,
         )["psbt"]
 
-        def _run_rbf(runner: Runner, conn: Conn) -> Dict[str, Any]:
-            bump = runner.rpc.openchannel_bump(
+        def _run_rbf(node: CLightningNodeAdapter) -> Dict[str, Any]:
+            bump = node.rpc.openchannel_bump(
                 channel_id, amount, initial_psbt, funding_feerate=fmt_feerate
             )
-            update = runner.rpc.openchannel_update(channel_id, bump["psbt"])
-
-            # Run until they're done sending us updates
+            update = node.rpc.openchannel_update(channel_id, bump["psbt"])
             while not update["commitments_secured"]:
-                update = runner.rpc.openchannel_update(channel_id, update["psbt"])
-            signed_psbt = runner.rpc.signpsbt(update["psbt"])["signed_psbt"]
-            return runner.rpc.openchannel_signed(channel_id, signed_psbt)
+                update = node.rpc.openchannel_update(channel_id, update["psbt"])
+            signed_psbt = node.rpc.signpsbt(update["psbt"])["signed_psbt"]
+            return node.rpc.openchannel_signed(channel_id, signed_psbt)
 
-        def _done(fut: Any) -> None:
-            exception = fut.exception(0)
-            if exception:
-                raise (exception)
+        fut = self.executor.submit(_run_rbf, self)
+        fut.add_done_callback(lambda task: task.exception(0))
 
-        fut = self.executor.submit(_run_rbf, self, conn)
-        fut.add_done_callback(_done)
-
-    def invoice(self, event: Event, amount: int, preimage: str) -> None:
+    def legacy_invoice(self, event: Event, amount: int, preimage: str) -> None:
         self.rpc.invoice(
             msatoshi=amount,
             label=str(event),
@@ -422,7 +394,7 @@ class Runner(lnprototest.Runner):
             preimage=preimage,
         )
 
-    def accept_add_fund(self, event: Event) -> None:
+    def legacy_accept_add_fund(self, event: Event) -> None:
         self.rpc.call(
             "funderupdate",
             {
@@ -433,22 +405,48 @@ class Runner(lnprototest.Runner):
             },
         )
 
-    def addhtlc(self, event: Event, conn: Conn, amount: int, preimage: str) -> None:
+    def legacy_addhtlc(
+        self, event: Event, conn: PeerSession, amount: int, preimage: str
+    ) -> None:
         payhash = hashlib.sha256(bytes.fromhex(preimage)).hexdigest()
         routestep = {
             "msatoshi": amount,
             "id": conn.pubkey.format().hex(),
-            # We internally add one.
             "delay": 4,
-            # We actually ignore this.
             "channel": "1x1x1",
         }
         self.rpc.sendpay([routestep], payhash)
 
+
+class Runner(lnprototest.Runner):
+    def __init__(self, config: Any):
+        super().__init__(config)
+        self.chain = CLightningChainBackend(self.directory)
+        self.node = CLightningNodeAdapter(config, self.directory, self.chain)
+
+    def recv(self, event: Event, conn: PeerSession, outbuf: bytes) -> None:
+        try:
+            conn.send_raw(outbuf)
+        except BrokenPipeError:
+            fut = self.node.executor.submit(
+                cast(CLightningPeerSession, conn).connection.read_message
+            )
+            try:
+                msg = fut.result(1)
+            except futures.TimeoutError:
+                msg = None
+            if msg:
+                raise EventError(
+                    event, "Connection closed after sending {}".format(msg.hex())
+                )
+            raise EventError(event, "Connection closed")
+
     def get_output_message(
-        self, conn: Conn, event: Event, timeout: int = TIMEOUT
+        self, conn: PeerSession, event: Event, timeout: int = TIMEOUT
     ) -> Optional[bytes]:
-        fut = self.executor.submit(cast(CLightningConn, conn).connection.read_message)
+        fut = self.node.executor.submit(
+            cast(CLightningPeerSession, conn).connection.read_message
+        )
         try:
             return fut.result(timeout)
         except futures.TimeoutError as ex:
@@ -458,8 +456,7 @@ class Runner(lnprototest.Runner):
             logging.error(f"{ex}")
             return None
 
-    def check_error(self, event: Event, conn: Conn) -> Optional[str]:
-        # We get errors in form of err msgs, always.
+    def check_error(self, event: Event, conn: PeerSession) -> Optional[str]:
         super().check_error(event, conn)
         msg = self.get_output_message(conn, event)
         if msg is None:
@@ -469,56 +466,25 @@ class Runner(lnprototest.Runner):
     def check_final_error(
         self,
         event: Event,
-        conn: Conn,
+        conn: PeerSession,
         expected: bool,
         must_not_events: List[MustNotMsg],
     ) -> None:
         if not expected:
-            # Inject raw packet to ensure it hangs up *after* processing all previous ones.
-            cast(CLightningConn, conn).connection.connection.send(bytes(18))
+            cast(CLightningPeerSession, conn).connection.connection.send(bytes(18))
 
             while True:
                 binmsg = self.get_output_message(conn, event)
                 if binmsg is None:
                     break
-                for e in must_not_events:
-                    if e.matches(binmsg):
+                for must_not in must_not_events:
+                    if must_not.matches(binmsg):
                         raise EventError(
-                            event, "Got msg banned by {}: {}".format(e, binmsg.hex())
+                            event, "Got msg banned by {}: {}".format(must_not, binmsg.hex())
                         )
 
-                # Don't assume it's a message type we know!
                 msgtype = struct.unpack(">H", binmsg[:2])[0]
                 if msgtype == namespace().get_msgtype("error").number:
                     raise EventError(event, "Got error msg: {}".format(binmsg.hex()))
 
-        cast(CLightningConn, conn).connection.connection.close()
-
-    def expect_tx(self, event: Event, txid: str) -> None:
-        # Ah bitcoin endianness...
-        revtxid = bitcoin.core.lx(txid).hex()
-
-        # This txid should appear in the mempool.
-        try:
-            wait_for(lambda: revtxid in self.bitcoind.rpc.getrawmempool())
-        except ValueError:
-            raise EventError(
-                event,
-                "Did not broadcast the txid {}, just {}".format(
-                    revtxid,
-                    [
-                        (txid, self.bitcoind.rpc.getrawtransaction(txid))
-                        for txid in self.bitcoind.rpc.getrawmempool()
-                    ],
-                ),
-            )
-
-    def has_option(self, optname: str) -> Optional[str]:
-        """Returns None if it doesn't support, otherwise 'even' or 'odd' (required or supported)"""
-        if optname in self.options:
-            return self.options[optname]
-        return None
-
-    def add_startup_flag(self, flag: str) -> None:
-        logging.debug("[ADD STARTUP FLAG '{}']".format(flag))
-        self.startup_flags.append("--{}".format(flag))
+        conn.close()

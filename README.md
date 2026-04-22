@@ -75,14 +75,10 @@ or directly:
 
 ## Brainstorming Materials
 
-This fork also carries a local design bundle under
-[`report/lnprototest-architecture/`](report/lnprototest-architecture/README.md)
-and [`design/`](design/README.md).
-
-These files are imported as fork-local brainstorming materials from a local
-checkout, not as upstream canonical documentation. See
-[`BRAINSTORMING-PROVENANCE.md`](BRAINSTORMING-PROVENANCE.md) for the exact
-source and intent.
+This fork carries an implementation-facing design bundle under
+[`design/`](design/README.md), including
+[`design/runner-boundary.md`](design/runner-boundary.md) as the primary
+boundary-cleanup proposal.
 
 # Further Work
 
