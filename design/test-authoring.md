@@ -16,7 +16,7 @@ authoring layer は三層で考える。
 
 ### Layer 1: Stable Session Seam
 
-最下層は [`runner-boundary.md`](./runner-boundary.md) で定義した `PeerSession` である。ここでは `open/connect`, `send_raw/send_msg`, `recv_raw/recv_msg`, `disconnect`, session-local stash しか要求しない。この layer が確定しない限り、どんな authoring syntax も transport や capability の誤った仮定を含みやすい。
+最下層は [`runner-boundary.md`](./runner-boundary.md) で定義した `PeerSession` である。ここでは `open/connect`, `send_raw/send_msg`, `recv_raw/recv_msg`, `disconnect`, error expectation の owner を明確にする。session-local stash は既存 Event DSL 互換のために残る詳細であり、この layer の主目的ではない。この layer が確定しない限り、どんな authoring syntax も transport や capability の誤った仮定を含みやすい。
 
 ### Layer 2: Compatibility Layer
 
@@ -26,7 +26,7 @@ authoring layer は三層で考える。
 
 その上に procedural authoring と decorator / DAG authoring を置く。procedural line の参照先は [`rustyrussell/lnprotest`](https://github.com/rustyrussell/lnprotest) と [`PR #95`](https://github.com/rustyrussell/lnprototest/pull/95) であり、decorator / DAG line の参照先は [`cdecker/lnpt`](https://github.com/cdecker/lnpt) である。ただし両者は boundary の代替ではなく、boundary の上に乗る authoring choice として扱う。
 
-このとき procedural API の v1 で保証するものは限定する。`conn = session.open(...)` 相当の session handle を取得し、`recv_msg()`, `send_msg()`, `disconnect()` を使って straight-line に会話を書けること。これは smoke test にはなるが、boundary split の主証明ではない。主証明は、BOLT7 gossip filter のような multi-session case で peer ごとの state / expectation を分離できることと、BOLT2 `channel_reestablish` のように session state と chain observation が絡むケースを fat `Runner` に戻さずに書けることである。そこに `runner.choose([...])` 相当の variant helper や typed-message convenience を積むのは次段階とする。最初から branching DSL や decorator graph を core contract にしない。
+このとき procedural API の v1 で保証するものは限定する。`conn = session.open(...)` 相当の session handle を取得し、`recv_msg()`, `send_msg()`, `disconnect()` を使って straight-line に会話を書けること。これは smoke test にはなるが、boundary split の主証明ではない。主証明は、BOLT7 gossip filter のような multi-session case で peer ごとの send / recv / disconnect / expectation を分離できることと、BOLT2 `channel_reestablish` のように session state と chain observation が絡むケースを fat `Runner` に戻さずに書けることである。そこに `runner.choose([...])` 相当の variant helper や typed-message convenience を積むのは次段階とする。最初から branching DSL や decorator graph を core contract にしない。
 
 ## What This Solves By Phase
 

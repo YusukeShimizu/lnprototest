@@ -34,7 +34,7 @@
 | [`PR #133`](https://github.com/rustyrussell/lnprototest/pull/133) | external runner を workflow へ取り込む実務 | Phase 1 |
 | [`rustyrussell/lnprotest`](https://github.com/rustyrussell/lnprotest) | straight-line authoring、`runner.choose([...])` | Phase 3 |
 | [`cdecker/lnpt`](https://github.com/cdecker/lnpt) | decorator/DAG authoring experiment | Phase 3 |
-| ユーザー提供 Discord 断片 | state machine 除去、per-connection stash、multiple connection 懸念 | Phase 2-3 |
+| ユーザー提供 Discord 断片 | state machine 除去、connection owner、multiple connection 懸念 | Phase 2-3 |
 | [`lnprototest` issue `#49`](https://github.com/rustyrussell/lnprototest/issues/49) | `channel_reestablish` proving target | Phase 4 |
 | [`lightning/bolts` issue `#934`](https://github.com/lightning/bolts/issues/934) | outdated `channel_reestablish` behavior | Phase 4 |
 

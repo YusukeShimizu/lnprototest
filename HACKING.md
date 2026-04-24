@@ -97,9 +97,10 @@ Here's the short outline of the current boundary split.
 - `LegacyRunnerAdapter`: keeps `connect`, `recv`, `get_output_message`, `has_option`, `get_keyset`, and other DSL-facing helpers by delegating to the three components above.
 
 This split is especially useful for tests that keep multiple peers connected at
-the same time. Each `PeerSession` owns its own message stream and stash, while
-the legacy runner still maps Event DSL `connprivkey` values to the right
-session for older tests.
+the same time. Each `PeerSession` owns its own message stream and lifecycle,
+while the legacy runner still maps Event DSL `connprivkey` values to the right
+session for older tests. Any session-local stash is a compatibility detail for
+the current Event DSL, not the main runner boundary.
 
 If you need legacy functionality such as `fundchannel`, `init_rbf`, `invoice`,
 or `addhtlc`, implement the corresponding `legacy_*` hooks on the `NodeAdapter`.

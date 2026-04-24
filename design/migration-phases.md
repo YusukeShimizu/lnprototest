@@ -12,9 +12,9 @@
 
 ## Phase 2: Boundary Split
 
-次に fix するのは責務境界である。対象は [`issue #98`](https://github.com/rustyrussell/lnprototest/issues/98)、[`PR #95`](https://github.com/rustyrussell/lnprototest/pull/95)、Discord 断片の per-connection stash / multiple connection 論点、[`lnprototest/runner.py`](../lnprototest/runner.py)、[`lnprototest/clightning/clightning.py`](../lnprototest/clightning/clightning.py) の現行 surface である。
+次に fix するのは責務境界である。対象は [`issue #98`](https://github.com/rustyrussell/lnprototest/issues/98)、[`PR #95`](https://github.com/rustyrussell/lnprototest/pull/95)、Discord 断片の multiple connection / auto-selected connection 論点、[`lnprototest/runner.py`](../lnprototest/runner.py)、[`lnprototest/clightning/clightning.py`](../lnprototest/clightning/clightning.py) の現行 surface である。
 
-この phase で解消する問題は、fat `Runner` contract、CLN-shaped capability leakage、runner-wide stash 前提、session owner の不在である。ここで `CapabilitySet`, `NodeAdapter`, `PeerSession`, `ChainBackend`, `LegacyRunnerAdapter` を official boundary として固定する。`PeerSession` の stable API は `open/connect`, `send_raw/send_msg`, `recv_raw/recv_msg`, `disconnect`, session-local stash だけとし、funding や RBF は optional extension に回す。
+この phase で解消する問題は、fat `Runner` contract、CLN-shaped capability leakage、connection owner の不在である。ここで `CapabilitySet`, `NodeAdapter`, `PeerSession`, `ChainBackend`, `LegacyRunnerAdapter` を official boundary として固定する。`PeerSession` の stable API は `open/connect`, `send_raw/send_msg`, `recv_raw/recv_msg`, `disconnect`, error expectation の owner に絞り、funding や RBF は optional extension に回す。stash は既存 Event DSL 互換のために扱うが、boundary の主目的にはしない。
 
 完了条件は、「何を core v1 に含め、何を後ろに送るか」が追加判断なしで読めることだ。まだ procedural syntax も remote transport も final にはしない。
 
@@ -30,7 +30,7 @@
 
 ここでは boundary が本当に成立するかを小さな conversation で証明する。対象は `init`, disconnect / reconnect, `channel_reestablish` の三つであり、議論ソースとしては [`lnprototest` issue `#49`](https://github.com/rustyrussell/lnprototest/issues/49) と [`lightning/bolts` issue `#934`](https://github.com/lightning/bolts/issues/934) が中心になる。
 
-この phase で解消する問題は、「新 boundary はきれいだが、実際に protocol conversation を書けるのか」という疑いである。`PeerSession` と session-local stash だけで三つの proving target を通せるなら、core v1 boundary は十分小さく、かつ十分強いとみなせる。
+この phase で解消する問題は、「新 boundary はきれいだが、実際に protocol conversation を書けるのか」という疑いである。`PeerSession` と `ChainBackend` だけで multi-session boundary、`init`、disconnect / reconnect、`channel_reestablish` の proving target を説明できるなら、core v1 boundary は十分小さく、かつ十分強いとみなせる。
 
 完了条件は、三つの proving target が boundary の追加拡張なしで説明できることだ。broad feature matrix や implementation-specific helper はまだ不要である。
 

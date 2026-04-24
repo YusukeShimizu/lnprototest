@@ -28,9 +28,9 @@ core boundary は次の 5 面に固定する。
 
 ### `PeerSession`
 
-`PeerSession` は protocol conversation の最小面である。ここで必須とするのは `open/connect`、`send_raw` または `send_msg`、`recv_raw` または `recv_msg`、`disconnect`、session-local stash のみである。session state は runner 全体ではなく connection/session 単位で保持する。Vincenzo が Discord 断片で「stash logic make sense to be per-connection and not per-runner」と言い直した線を、この面で正式化する。
+`PeerSession` は protocol conversation の最小面である。ここで必須とするのは `open/connect`、`send_raw` または `send_msg`、`recv_raw` または `recv_msg`、`disconnect`、error expectation の owner である。session state は runner 全体ではなく connection/session 単位で保持する。Vincenzo が Discord 断片で触れた per-connection stash はこの方向と整合するが、stash 自体は主 contract ではない。既存 Event DSL 互換のために残る実装上の詳細として扱う。
 
-acceptance line は三つで固定する。`init` がこの面だけで書けること。disconnect / reconnect が session lifecycle として表現できること。`channel_reestablish` が session-local stash で扱えること。この三つを超える node-local operation は最初から必須にしない。
+acceptance line は三つで固定する。`init` がこの面だけで書けること。disconnect / reconnect が session lifecycle として表現できること。`channel_reestablish` の会話と error expectation を session owner のもとで扱えること。この三つを超える node-local operation は最初から必須にしない。
 
 ### `ChainBackend`
 
@@ -46,7 +46,7 @@ acceptance line は三つで固定する。`init` がこの面だけで書ける
 
 Phase 1 では、この boundary split 自体はまだ実装しない。ただし [`issue #128`](https://github.com/rustyrussell/lnprototest/issues/128) に対し、「core と runner package の ownership を分ける」と明文化することで、どこまでが core responsibility かを先に見やすくする。
 
-Phase 2 でこの文書の設計を固定する。ここで解消されるのは、`Runner` の fat contract、CLN-shaped capability leakage、runner-wide stash 前提、session owner の曖昧さである。逆にこの phase では procedural syntax の final form や remote API はまだ決めない。
+Phase 2 でこの文書の設計を固定する。ここで解消されるのは、`Runner` の fat contract、CLN-shaped capability leakage、connection owner の曖昧さである。runner-wide stash 前提も互換層へ閉じ込めるが、これは副次的な整理である。逆にこの phase では procedural syntax の final form や remote API はまだ決めない。
 
 Phase 3 では `LegacyRunnerAdapter` の上に Event DSL と procedural API を並べることで、authoring 議論を boundary split の後段へ移す。
 

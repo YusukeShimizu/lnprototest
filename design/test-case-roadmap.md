@@ -6,8 +6,8 @@
 
 最初に executable にするのは、protocol conversation と chain observation の境界が必要になる小さなケースに限定する。中心は authoring style ではなく、session / chain / node の責務分割である。特に issue #105 への返答としては、「新しい書き方ができる」よりも「これまで見通しが悪かった multi-session case を増やせる形に近づく」ことを主証明にする。
 
-- Primary proof は multi-session boundary に置く。既存の `tests/test_bolt7-10-gossip-filter.py` は、`connprivkey="05"` と `"06"` が同時に異なる gossip filter state を持つ実プロトコル例であり、session owner と peer-local expectation が runner-wide state に埋もれる問題を示す reference case として扱う。
-- `tests/test_runner_boundary.py` では二つの `PeerSession` が別々の send / recv / stash / disconnect state を持ち、片方の disconnect がもう片方を閉じないことを unit level で固定する。
+- Primary proof は multi-session boundary に置く。既存の `tests/test_bolt7-10-gossip-filter.py` は、`connprivkey="05"` と `"06"` が同時に異なる gossip filter state を持つ実プロトコル例であり、connection owner と peer-local expectation が runner-wide state に埋もれる問題を示す reference case として扱う。
+- `tests/test_runner_boundary.py` では二つの `PeerSession` が別々の send / recv / disconnect state を持ち、片方の disconnect がもう片方を閉じないことを unit level で固定する。session-local stash は既存 DSL 互換のために確認するが、主証明にはしない。
 - BOLT2 `channel_reestablish` は chain boundary proof として残す。既存正常系の setup を helper 化し、正常 reconnect と abnormal reconnect が同じ channel/session 前提を共有できることを示す。
 - outdated `next_commitment_number` を送ったとき、peer が error / disconnect の前に commitment transaction を即座に mempool へ出さないことを `ExpectNoTx` で表現する。
 - `ExpectNoTx` は `ChainBackend` の最小補助として追加する。ここでは「その時点の mempool に specific txid がない」だけを確認し、時間幅を持つ liveness assertion は導入しない。
@@ -22,7 +22,7 @@
 
 - `your_last_per_commitment_secret` が不整合な場合の error / disconnect behavior を追加する。
 - `next_revocation_number` が進みすぎている場合と遅れている場合を分け、どちらが fail-fast で、どちらが data loss protection flow に入るべきかを明示する。
-- BOLT7 gossip filter の既存 multi-session test を新 boundary 上の authoring target として分解し、peer-local gossip filter state と future gossip expectation を session-local に表現できるか確認する。
+- BOLT7 gossip filter の既存 multi-session test を新 boundary 上の authoring target として分解し、peer-local gossip filter state と future gossip expectation を connection owner のもとで表現できるか確認する。
 - `runner.choose([...])` を入れる前に、既存 Event DSL だけで abnormal cases が表現できる限界を確認する。
 
 ## Phase 3: Later Specification Backlog
