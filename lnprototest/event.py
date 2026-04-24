@@ -436,6 +436,19 @@ class ExpectTx(Event):
         return True
 
 
+class ExpectNoTx(Event):
+    """Assert that the runner has not broadcast a transaction."""
+
+    def __init__(self, txid: ResolvableStr):
+        super().__init__()
+        self.txid = txid
+
+    def action(self, runner: "Runner") -> bool:
+        super().action(runner)
+        runner.expect_no_tx(self, self.resolve_arg("txid", runner, self.txid))
+        return True
+
+
 class FundChannel(PerConnEvent):
     """Tell the runner to fund a channel with this peer."""
 

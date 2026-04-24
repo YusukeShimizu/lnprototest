@@ -26,7 +26,7 @@ authoring layer は三層で考える。
 
 その上に procedural authoring と decorator / DAG authoring を置く。procedural line の参照先は [`rustyrussell/lnprotest`](https://github.com/rustyrussell/lnprotest) と [`PR #95`](https://github.com/rustyrussell/lnprototest/pull/95) であり、decorator / DAG line の参照先は [`cdecker/lnpt`](https://github.com/cdecker/lnpt) である。ただし両者は boundary の代替ではなく、boundary の上に乗る authoring choice として扱う。
 
-このとき procedural API の v1 で保証するものは限定する。`conn = session.open(...)` 相当の session handle を取得し、`recv_msg()`, `send_msg()`, `disconnect()` を使って straight-line に会話を書けること。そこに `runner.choose([...])` 相当の variant helper や typed-message convenience を積むのは次段階とする。最初から branching DSL や decorator graph を core contract にしない。
+このとき procedural API の v1 で保証するものは限定する。`conn = session.open(...)` 相当の session handle を取得し、`recv_msg()`, `send_msg()`, `disconnect()` を使って straight-line に会話を書けること。これは smoke test にはなるが、boundary split の主証明ではない。主証明は、BOLT7 gossip filter のような multi-session case で peer ごとの state / expectation を分離できることと、BOLT2 `channel_reestablish` のように session state と chain observation が絡むケースを fat `Runner` に戻さずに書けることである。そこに `runner.choose([...])` 相当の variant helper や typed-message convenience を積むのは次段階とする。最初から branching DSL や decorator graph を core contract にしない。
 
 ## What This Solves By Phase
 
@@ -34,7 +34,7 @@ Phase 2 では authoring syntax はまだ変えない。その代わり `LegacyR
 
 Phase 3 で authoring layer を再配置する。ここで解消されるのは、「Event DSL と procedural API はどちらが正しいか」という不毛な二択である。実際には両者は同じ minimal seam の上に共存できる。`lnprotest` の straight-line style は layer 3 の procedural API へ、`lnpt` の DAG experiment は別 authoring style へ、それぞれ位置づける。
 
-Phase 4 では `init`, disconnect / reconnect, `channel_reestablish` を使って、Event DSL と procedural API のどちらでも同じ session seam を通ることを確認する。ここで proving target が成立しないなら authoring layer ではなく boundary split が誤っている。
+Phase 4 では multi-session case と `channel_reestablish` abnormal case を主対象にし、`init` と disconnect / reconnect は補助 smoke として扱う。Event DSL と procedural API のどちらを使うかより、同じ session seam と chain backend seam で必要な conversation を表現できることを確認する。ここで proving target が成立しないなら authoring layer ではなく boundary split が誤っている。
 
 Phase 5 では remote adapter を導入しても authoring layer が変わらないことを確認する。transport の違いで authoring API を作り替える設計は採らない。
 

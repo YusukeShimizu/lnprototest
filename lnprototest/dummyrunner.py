@@ -2,7 +2,7 @@
 # #### Dummy runner which you should replace with real one. ####
 import io
 
-from typing import Any, List
+from typing import Any, List, Optional
 
 from pyln.proto.message import (
     DynamicArrayType,
@@ -15,6 +15,7 @@ from pyln.proto.message import (
 from .boundary import CapabilitySet, ChainBackend, NodeAdapter, PeerSession
 from .event import Event, ExpectMsg, MustNotMsg
 from .keyset import KeySet
+from .namespace import namespace
 from .runner import Conn, Runner
 
 
@@ -22,13 +23,21 @@ class DummyPeerSession(PeerSession):
     def __init__(self, connprivkey: str, verbose: bool = False):
         super().__init__(connprivkey)
         self.verbose = verbose
+        self.recv_queue: List[bytes] = []
 
     def send_raw(self, payload: bytes) -> None:
         if self.verbose:
             print("[RECV {}]".format(payload.hex()))
 
-    def recv_raw(self, timeout: int = None) -> bytes:
-        raise RuntimeError("DummyPeerSession does not provide raw reads directly")
+    def recv_raw(self, timeout: Optional[int] = None) -> bytes:
+        if not self.recv_queue:
+            msg = Message(
+                namespace().get_msgtype("init"), globalfeatures="", features=""
+            )
+            binmsg = io.BytesIO()
+            msg.write(binmsg)
+            self.recv_queue.append(binmsg.getvalue())
+        return self.recv_queue.pop(0)
 
     def close(self) -> None:
         if self.verbose:
@@ -65,6 +74,10 @@ class DummyChainBackend(ChainBackend):
     def expect_tx(self, event: Event, txid: str) -> None:
         if self.config.getoption("verbose"):
             print("[EXPECT-TX {}]".format(txid))
+
+    def expect_no_tx(self, event: Event, txid: str) -> None:
+        if self.config.getoption("verbose"):
+            print("[EXPECT-NO-TX {}]".format(txid))
 
 
 class DummyNodeAdapter(NodeAdapter):
@@ -179,9 +192,17 @@ class DummyRunner(Runner):
         if self.config.getoption("verbose"):
             print("[RESTART]")
 
-    def connect(self, event: Event, connprivkey: str) -> Conn:
+    def connect(
+        self, event: Optional[Event] = None, connprivkey: Optional[str] = None
+    ) -> Conn:
+        if connprivkey is None and isinstance(event, str):
+            printable_event = None
+            printable_connprivkey = event
+        else:
+            printable_event = event
+            printable_connprivkey = connprivkey
         if self.config.getoption("verbose"):
-            print("[CONNECT {} {}]".format(event, connprivkey))
+            print("[CONNECT {} {}]".format(printable_event, printable_connprivkey))
         return super().connect(event, connprivkey)
 
     def disconnect(self, event: Event, conn: Conn) -> None:

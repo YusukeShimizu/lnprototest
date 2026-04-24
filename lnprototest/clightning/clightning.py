@@ -109,10 +109,21 @@ class CLightningChainBackend(ChainBackend):
                 "Did not broadcast the txid {}, just {}".format(
                     revtxid,
                     [
-                        (mempool_txid, self._bitcoind().rpc.getrawtransaction(mempool_txid))
+                        (
+                            mempool_txid,
+                            self._bitcoind().rpc.getrawtransaction(mempool_txid),
+                        )
                         for mempool_txid in self._bitcoind().rpc.getrawmempool()
                     ],
                 ),
+            )
+
+    def expect_no_tx(self, event: Event, txid: str) -> None:
+        revtxid = bitcoin.core.lx(txid).hex()
+        mempool = self._bitcoind().rpc.getrawmempool()
+        if revtxid in mempool:
+            raise EventError(
+                event, "Unexpectedly broadcast the txid {}".format(revtxid)
             )
 
 
@@ -327,7 +338,9 @@ class CLightningNodeAdapter(NodeAdapter):
                 self.cleanup_callbacks.remove(self.kill_fundchannel)
 
         time.sleep(1)
-        fut = self.executor.submit(_fundchannel, self, conn, amount, feerate, expect_fail)
+        fut = self.executor.submit(
+            _fundchannel, self, conn, amount, feerate, expect_fail
+        )
         fut.add_done_callback(_done)
         self.fundchannel_future = fut
         self.cleanup_callbacks.append(self.kill_fundchannel)
@@ -480,7 +493,8 @@ class Runner(lnprototest.Runner):
                 for must_not in must_not_events:
                     if must_not.matches(binmsg):
                         raise EventError(
-                            event, "Got msg banned by {}: {}".format(must_not, binmsg.hex())
+                            event,
+                            "Got msg banned by {}: {}".format(must_not, binmsg.hex()),
                         )
 
                 msgtype = struct.unpack(">H", binmsg[:2])[0]

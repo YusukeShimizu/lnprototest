@@ -14,11 +14,15 @@
    `Runner` の責務分割と、core 側に残す最小契約を決める。
 3. [`test-authoring.md`](./test-authoring.md)
    authoring 改善を boundary の上位層としてどう扱うかを決める。
-4. [`remote-adapter.md`](./remote-adapter.md)
+4. [`test-case-roadmap.md`](./test-case-roadmap.md)
+   `runner-boundary.md` と `test-authoring.md` の proving step として、最初に executable にする multi-session / chain-boundary テストケースを固定する。
+5. [`issue-105-feedback.md`](./issue-105-feedback.md)
+   public issue #105 へ返すための argument を、multi-session test expansion を中心に整理する。
+6. [`remote-adapter.md`](./remote-adapter.md)
    `stdio` / Unix socket / HTTP / gRPC の導入順序と非目標を固定する。
-5. [`migration-phases.md`](./migration-phases.md)
+7. [`migration-phases.md`](./migration-phases.md)
    各 phase で何が解消され、何がまだ残るかを migration path として確定する。
-6. [`appendix-links.md`](./appendix-links.md)
+8. [`appendix-links.md`](./appendix-links.md)
    証拠 URL、private Discord の扱い、公開ソースとの対応関係を参照する。
 
 ## Decision Summary
@@ -27,7 +31,7 @@
 
 - `external runner 化` と `core boundary 改善` は別工程として扱う。
 - `Runner` は最終的に `CapabilitySet`、`NodeAdapter`、`PeerSession`、`ChainBackend`、`LegacyRunnerAdapter` に分かれる。
-- v1 の stable contract は `PeerSession` 中心であり、`init`、disconnect / reconnect、`channel_reestablish` を扱えることを acceptance line にする。
+- v1 の stable contract は `PeerSession` 中心であり、multi-session state、`init`、disconnect / reconnect、`channel_reestablish` を扱えることを acceptance line にする。
 - Event DSL は捨てず、互換層の上位 API として残す。procedural API はその後に足す。
 - remote adapter は boundary 固定後に導入する。初手は `stdio` か Unix socket sidecar であり、gRPC は最初の transport ではない。
 - `BLIP32` のような feature-specific extension は core v1 の境界に含めず、implementation-owned external test package で先行させる。

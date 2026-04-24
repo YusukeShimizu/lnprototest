@@ -25,15 +25,36 @@ lightning network protocol, as well as test existing implementations.
 
 ## Install requirements
 
-To install the necessary dependences
+This repository does not check in a virtual environment. Use `uv` to create a
+local `.venv` and install the package in editable mode:
 
 ```bash
-pip3 install poetry
-poetry shell
-poetry install
+uv venv .venv
+source .venv/bin/activate
+uv pip install -e . pytest black flake8 pytest-xdist mypy
+pytest tests/test_runner_boundary.py -q
 ```
 
-Well, now we can run the test
+The project still uses Poetry-style metadata in `pyproject.toml`, so `uv run`
+does not work in normal project mode. For a one-off run without creating
+`.venv`, use `--no-project` and set `PYTHONPATH=.`:
+
+```bash
+PYTHONPATH=. uv run --no-project \
+  --with pytest \
+  --with pyln-bolt1 \
+  --with pyln-bolt2 \
+  --with pyln-bolt7 \
+  --with pyln-proto \
+  --with pyln-client \
+  --with pyln-testing \
+  --with python-bitcoinlib \
+  --with coincurve \
+  --with crc32c \
+  pytest tests/test_runner_boundary.py -q
+```
+
+Well, now we can run the tests.
 
 ## Running test
 

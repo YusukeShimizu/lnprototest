@@ -16,7 +16,6 @@ from .keyset import KeySet
 from .structure import Sequence
 from .utils import privkey_expand
 
-
 Conn = PeerSession
 RunnerConn = PeerSession
 
@@ -135,7 +134,14 @@ class LegacyRunnerAdapter:
     def is_running(self) -> bool:
         return self._node().is_running()
 
-    def connect(self, event: Event, connprivkey: str) -> Conn:
+    def connect(
+        self, event: Optional[Event] = None, connprivkey: Optional[str] = None
+    ) -> Conn:
+        if connprivkey is None and isinstance(event, str):
+            connprivkey = event
+            event = None
+        if connprivkey is None:
+            raise SpecFileError(event, "Missing connprivkey")
         conn = self._node().open_session(connprivkey)
         self.add_conn(conn)
         return conn
@@ -167,6 +173,9 @@ class LegacyRunnerAdapter:
 
     def expect_tx(self, event: Event, txid: str) -> None:
         self._chain().expect_tx(event, txid)
+
+    def expect_no_tx(self, event: Event, txid: str) -> None:
+        self._chain().expect_no_tx(event, txid)
 
     def invoice(self, event: Event, amount: int, preimage: str) -> None:
         self._node().legacy_invoice(event, amount, preimage)

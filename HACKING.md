@@ -91,10 +91,15 @@ A completed core-lightning example runner can be found in `lnprototest/clightnin
 
 Here's the short outline of the current boundary split.
 
-- `PeerSession`: `send_raw`, `recv_raw`, `close`, plus the built-in `send_msg` / `recv_msg` helpers.
+- `PeerSession`: `send_raw`, `recv_raw`, `close`, plus the built-in `send_msg` / `recv_msg` helpers and their `send` / `recv` / `disconnect` aliases.
 - `NodeAdapter`: `start`, `stop`, `restart`, `open_session`, `capabilities`.
-- `ChainBackend`: `start`, `stop`, `restart`, `block_height`, `trim_blocks`, `mine_blocks`, `expect_tx`.
+- `ChainBackend`: `start`, `stop`, `restart`, `block_height`, `trim_blocks`, `mine_blocks`, `expect_tx`, `expect_no_tx`.
 - `LegacyRunnerAdapter`: keeps `connect`, `recv`, `get_output_message`, `has_option`, `get_keyset`, and other DSL-facing helpers by delegating to the three components above.
+
+This split is especially useful for tests that keep multiple peers connected at
+the same time. Each `PeerSession` owns its own message stream and stash, while
+the legacy runner still maps Event DSL `connprivkey` values to the right
+session for older tests.
 
 If you need legacy functionality such as `fundchannel`, `init_rbf`, `invoice`,
 or `addhtlc`, implement the corresponding `legacy_*` hooks on the `NodeAdapter`.

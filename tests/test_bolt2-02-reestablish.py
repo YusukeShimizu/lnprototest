@@ -1,12 +1,17 @@
 #! /usr/bin/env python3
 # Variations on adding an HTLC.
 
+from typing import Any, Callable, List, Tuple
+
 from lnprototest import (
     TryAll,
     Sequence,
     Connect,
     Block,
     ExpectMsg,
+    ExpectNoTx,
+    ExpectError,
+    ExpectDisconnect,
     Msg,
     RawMsg,
     CreateFunding,
@@ -62,7 +67,14 @@ data_loss_protect = 1
 anchor_outputs = 21
 
 
-def test_reestablish(runner: Runner) -> None:
+def remote_commitment_txid() -> Callable[[Runner, Any, str], str]:
+    def _remote_commitment_txid(runner: Runner, event: Any, field: str) -> str:
+        return runner.get_stash(event, "Commit").remote_unsigned_tx().GetTxid().hex()
+
+    return _remote_commitment_txid
+
+
+def reestablish_setup(runner: Runner) -> Tuple[Any, List[Any]]:
     local_funding_privkey = "20"
     local_keyset = gen_random_keyset(int(local_funding_privkey))
     connections_events = connect_to_node_helper(
@@ -155,6 +167,14 @@ def test_reestablish(runner: Runner) -> None:
             channel_id=channel_id(),
             second_per_commitment_point=local_keyset.per_commit_point(1),
         ),
+    ]
+
+    return local_keyset, merge_events_sequences(connections_events, test_events)
+
+
+def test_reestablish(runner: Runner) -> None:
+    local_keyset, pre_events = reestablish_setup(runner)
+    test_events = [
         Disconnect(),
         Connect(connprivkey="02"),
         ExpectMsg("init"),
@@ -208,4 +228,38 @@ def test_reestablish(runner: Runner) -> None:
         # the wrong info!
     ]
 
-    run_runner(runner, merge_events_sequences(connections_events, test_events))
+    run_runner(runner, merge_events_sequences(pre_events, test_events))
+
+
+def test_reestablish_outdated_commitment_number_does_not_publish(
+    runner: Runner,
+) -> None:
+    local_keyset, pre_events = reestablish_setup(runner)
+    is_cln = runner.__class__.__module__.startswith("lnprototest.clightning")
+
+    test_events = [
+        Disconnect(),
+        Connect(connprivkey="02"),
+        ExpectMsg("init"),
+        Msg("init", globalfeatures="", features=sent("init.features")),
+        ExpectMsg(
+            "channel_reestablish",
+            channel_id=channel_id(),
+            next_commitment_number=1,
+            next_revocation_number=0,
+            your_last_per_commitment_secret="00" * 32,
+        ),
+        Msg(
+            "channel_reestablish",
+            channel_id=channel_id(),
+            next_commitment_number=0,
+            next_revocation_number=0,
+            your_last_per_commitment_secret="00" * 32,
+            my_current_per_commitment_point=local_keyset.per_commit_point(0),
+        ),
+        ExpectNoTx(remote_commitment_txid()),
+        Sequence(ExpectDisconnect(), enable=is_cln),
+        Sequence(ExpectError(), enable=not is_cln),
+    ]
+
+    run_runner(runner, merge_events_sequences(pre_events, test_events))

@@ -59,9 +59,9 @@ class CapabilitySet:
         return self.extensions.get(name, False)
 
     def supports(self, name: str) -> bool:
-        return self.protocol_level(name) != CapabilityLevel.ABSENT or self.extension_enabled(
+        return self.protocol_level(
             name
-        )
+        ) != CapabilityLevel.ABSENT or self.extension_enabled(name)
 
     def legacy_has_option(self, name: str) -> Optional[str]:
         if name in self.extensions:
@@ -132,6 +132,15 @@ class PeerSession(ABC):
         msg = Message.read(namespace(), io.BytesIO(raw_msg))
         self.add_stash(msg.messagetype.name, msg)
         return msg
+
+    def send(self, msg_name: str, **kwargs: Any) -> None:
+        self.send_msg(msg_name, **kwargs)
+
+    def recv(self, timeout: Optional[int] = None) -> Message:
+        return self.recv_msg(timeout=timeout)
+
+    def disconnect(self) -> None:
+        self.close()
 
     @abstractmethod
     def send_raw(self, payload: bytes) -> None:
@@ -253,4 +262,8 @@ class ChainBackend(ABC):
 
     @abstractmethod
     def expect_tx(self, event: "Event", txid: str) -> None:
+        pass
+
+    @abstractmethod
+    def expect_no_tx(self, event: "Event", txid: str) -> None:
         pass
