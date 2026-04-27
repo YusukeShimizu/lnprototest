@@ -1,0 +1,40 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "test: pytest",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/python",
+      "args": ["-m", "pytest", "tests"],
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "test: current file",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/python",
+      "args": ["-m", "pytest", "${file}"],
+      "group": "test",
+      "problemMatcher": []
+    },
+    {
+      "label": "check: make",
+      "type": "shell",
+      "command": "make",
+      "args": ["check"],
+      "group": "test",
+      "problemMatcher": []
+    },
+    {
+      "label": "format: black",
+      "type": "shell",
+      "command": "${workspaceFolder}/.venv/bin/python",
+      "args": ["-m", "black", "."],
+      "group": "build",
+      "problemMatcher": []
+    }
+  ]
+}

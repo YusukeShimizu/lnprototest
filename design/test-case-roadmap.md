@@ -13,6 +13,7 @@
 - `ExpectNoTx` は `ChainBackend` の最小補助として追加する。ここでは「その時点の mempool に specific txid がない」だけを確認し、時間幅を持つ liveness assertion は導入しない。
 - BOLT1 `init` echo / reconnect の procedural tests は secondary smoke として残す。`runner.connect(connprivkey="03")`, `conn.recv_msg()`, `conn.send_msg(...)` が動くことは見るが、boundary split の主証明とは扱わない。
 - `PeerSession.recv()`, `PeerSession.send(...)`, `PeerSession.disconnect()` は convenience として追加し、既存 `recv_msg`, `send_msg`, `close` に委譲されることを unit test で固定する。
+- BOLT8 encrypted transport は [`bolt8-test-gap.md`](./bolt8-test-gap.md) に分けて扱う。post-handshake message I/O は `PeerSession` のまま保ち、handshake acts / message encryption / key rotation は test-only transport harness と small live raw probe の proving case にする。
 
 この phase では `runner.choose([...])` は実装しない。分岐網羅は従来通り `TryAll` や pytest の明示的な test case に任せ、探索 semantics は後続設計に回す。
 
@@ -37,9 +38,12 @@ runner boundary の proving が終わってから、仕様面の大きな backlo
 
 これらは重要だが、v1 boundary の acceptance line には入れない。最初の acceptance line は multi-session boundary を primary proof にし、`channel_reestablish` abnormal case は chain-boundary proof、`init` と disconnect / reconnect は smoke として補助する。ここが成立してから feature-specific extension を増やす。
 
+BOLT8 はこの backlog とは別に、transport boundary proving case として扱う。仕様領域は広いが、初回は公式 test vector の unit 化と CLN malformed act1 の小さな live smoke に限定する。
+
 ## Public References
 
 - rustyrussell/lnprotest README: 後続 authoring layer の参考形。
 - rustyrussell/lnprototest PR #95: session state と `RunnerConn` 導入方向の先行議論。
 - rustyrussell/lnprototest issue #49: `channel_reestablish` failure case の executable test 化。
 - lightning/bolts issue #934: outdated `channel_reestablish` 受信時に commitment を publish すべきでない問題意識。
+- lightning/bolts BOLT #8: encrypted transport の handshake / message encryption / key rotation test vector。
